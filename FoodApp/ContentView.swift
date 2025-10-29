@@ -31,16 +31,53 @@ struct Meal: Codable, Identifiable {
     var id: String { "\(recipeId)-\(name)" }
 }
 
+extension Array {
+    func partitioned(by belongsInFirstPartition: (Element) -> Bool) -> ([Element], [Element]) {
+        var first: [Element] = []
+        var second: [Element] = []
+        for element in self {
+            if belongsInFirstPartition(element) {
+                first.append(element)
+            } else {
+                second.append(element)
+            }
+        }
+        return (first, second)
+    }
+}
+
+struct NutrientStats {
+    let protein: Double
+    let kcal: Double
+    var kcalPerProtein: Double { protein > 0 ? kcal / protein : .infinity }
+}
+
 struct ContentView: View {
     @State private var meals = [Meal]()
+    @State private var nutrientStats: [Int: NutrientStats] = [:] // key: recipeId
+    @State private var sortedMeals = [Meal]()
 
     var body: some View {
         NavigationStack {
-            List(meals) { meal in
+            List(sortedMeals) { meal in
                 NavigationLink(destination: MealDetailView(recipeId: meal.recipeId, mealName: meal.name)) {
-                    VStack(alignment: .leading) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(meal.name)
                             .font(.headline)
+                        if let stats = nutrientStats[meal.recipeId], stats.kcalPerProtein.isFinite {
+                            HStack(spacing: 12) {
+                                Text("Protein: \(formatNumber(stats.protein)) g")
+                                Text("Calories: \(formatNumber(stats.kcal)) kcal")
+                                Text("kcal/g protein: \(formatNumber(stats.kcalPerProtein))")
+                            }
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                        } else {
+                            Text("Nutrition unavailable")
+                                .font(.footnote)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
             }
@@ -59,13 +96,80 @@ struct ContentView: View {
             let (data, _) = try await URLSession.shared.data(from: url)
 
             if let decodedMenu = try? JSONDecoder().decode(DayMenu.self, from: data) {
+                let flatMeals = decodedMenu.menuPackages.flatMap { $0.meals }
                 await MainActor.run {
-                    meals = decodedMenu.menuPackages.flatMap { $0.meals }
+                    meals = flatMeals
+                }
+                // Fetch nutrient stats for each meal (concurrently), then compute sorted order
+                await fetchNutrientStats(for: flatMeals)
+                await MainActor.run {
+                    computeSortedMeals()
                 }
             }
         } catch {
             print("Decoding or network error:", error)
         }
+    }
+    
+    private func fetchNutrientStats(for meals: [Meal]) async {
+        await withTaskGroup(of: (Int, NutrientStats?)?.self) { group in
+            for meal in meals {
+                let recipeId = meal.recipeId
+                guard recipeId != 0 else { continue }
+                group.addTask {
+                    guard let url = URL(string: "https://www.semma.fi/menuapi/recipes/\(recipeId)?language=fi") else {
+                        return (recipeId, nil)
+                    }
+                    do {
+                        let (data, _) = try await URLSession.shared.data(from: url)
+                        let detail = try JSONDecoder().decode(RecipeDetail.self, from: data)
+                        // Extract kcal and protein from nutritionalValues
+                        let kcal = detail.nutritionalValues.first(where: { $0.name == "EnergyKcal" })?.amount
+                        let protein = detail.nutritionalValues.first(where: { $0.name == "Protein" })?.amount
+                        if let kcal, let protein {
+                            return (recipeId, NutrientStats(protein: protein, kcal: kcal))
+                        } else {
+                            return (recipeId, nil)
+                        }
+                    } catch {
+                        print("Failed to fetch stats for \(recipeId):", error)
+                        return (recipeId, nil)
+                    }
+                }
+            }
+            var newStats: [Int: NutrientStats] = [:]
+            for await result in group {
+                if let (rid, stat) = result, let stat {
+                    newStats[rid] = stat
+                }
+            }
+            await MainActor.run {
+                self.nutrientStats = newStats
+            }
+        }
+    }
+    
+    private func computeSortedMeals() {
+        // Meals with valid stats first, sorted by kcal/protein ascending; others at bottom
+        let (withStats, withoutStats) = meals.partitioned { meal in
+            if let stats = nutrientStats[meal.recipeId] {
+                return stats.kcalPerProtein.isFinite
+            }
+            return false
+        }
+        let sortedWithStats = withStats.sorted {
+            guard let a = nutrientStats[$0.recipeId], let b = nutrientStats[$1.recipeId] else { return false }
+            return a.kcalPerProtein < b.kcalPerProtein
+        }
+        self.sortedMeals = sortedWithStats + withoutStats
+    }
+    
+    private func formatNumber(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 0
+        formatter.decimalSeparator = Locale.current.decimalSeparator
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 }
 
