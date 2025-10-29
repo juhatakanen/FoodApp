@@ -31,6 +31,52 @@ struct Meal: Codable, Identifiable {
     var id: String { "\(recipeId)-\(name)" }
 }
 
+enum Host: String, Hashable {
+    case semma
+    case compass
+    
+    var dayMenuBase: String {
+        switch self {
+        case .semma: return "https://www.semma.fi/menuapi/day-menus"
+        case .compass: return "https://www.compass-group.fi/menuapi/day-menus"
+        }
+    }
+    
+    var recipeBase: String {
+        switch self {
+        case .semma: return "https://www.semma.fi/menuapi/recipes"
+        case .compass: return "https://www.compass-group.fi/menuapi/recipes"
+        }
+    }
+}
+
+struct Restaurant: Hashable {
+    let name: String
+    let costCenter: String   // keep as String to preserve leading zeros
+    let host: Host
+}
+
+struct DisplayMeal: Identifiable, Hashable {
+    let id: String           // recipeId-name-host to ensure uniqueness
+    let name: String
+    let recipeId: Int
+    let diets: [String]
+    let iconUrl: String
+    let restaurantName: String
+    let host: Host
+}
+    
+struct NutrientStats {
+    let protein: Double
+    let kcal: Double
+    var kcalPerProtein: Double { protein > 0 ? kcal / protein : .infinity }
+}
+
+struct CompositeKey: Hashable {
+    let recipeId: Int
+    let host: Host
+}
+
 extension Array {
     func partitioned(by belongsInFirstPartition: (Element) -> Bool) -> ([Element], [Element]) {
         var first: [Element] = []
@@ -46,25 +92,22 @@ extension Array {
     }
 }
 
-struct NutrientStats {
-    let protein: Double
-    let kcal: Double
-    var kcalPerProtein: Double { protein > 0 ? kcal / protein : .infinity }
-}
-
 struct ContentView: View {
-    @State private var meals = [Meal]()
-    @State private var nutrientStats: [Int: NutrientStats] = [:] // key: recipeId
-    @State private var sortedMeals = [Meal]()
+    @State private var meals = [DisplayMeal]()
+    @State private var nutrientStats: [CompositeKey: NutrientStats] = [:]
+    @State private var sortedMeals = [DisplayMeal]()
 
     var body: some View {
         NavigationStack {
             List(sortedMeals) { meal in
-                NavigationLink(destination: MealDetailView(recipeId: meal.recipeId, mealName: meal.name)) {
+                NavigationLink(destination: MealDetailView(recipeId: meal.recipeId, mealName: meal.name, host: meal.host)) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(meal.name)
                             .font(.headline)
-                        if let stats = nutrientStats[meal.recipeId], stats.kcalPerProtein.isFinite {
+                        Text(meal.restaurantName)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        if let stats = nutrientStats[CompositeKey(recipeId: meal.recipeId, host: meal.host)], stats.kcalPerProtein.isFinite {
                             HStack(spacing: 12) {
                                 Text("Protein: \(formatNumber(stats.protein)) g")
                                 Text("Calories: \(formatNumber(stats.kcal)) kcal")
@@ -88,59 +131,97 @@ struct ContentView: View {
         }
     }
     func loadData() async {
-        guard let url = URL(string: "https://www.semma.fi/menuapi/day-menus?costCenter=1408&date=2025-10-29&language=fi") else {
-            print("Invalid URL")
-            return
-        }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-
-            if let decodedMenu = try? JSONDecoder().decode(DayMenu.self, from: data) {
-                let flatMeals = decodedMenu.menuPackages.flatMap { $0.meals }
-                await MainActor.run {
-                    meals = flatMeals
-                }
-                // Fetch nutrient stats for each meal (concurrently), then compute sorted order
-                await fetchNutrientStats(for: flatMeals)
-                await MainActor.run {
-                    computeSortedMeals()
+        // Date string you want to fetch
+        let dateStr = "2025-10-29"
+        let restaurants: [Restaurant] = [
+            .init(name: "Rentukka", costCenter: "1416", host: .semma),
+            .init(name: "Piato",    costCenter: "1408", host: .semma),
+            .init(name: "Lozzi",    costCenter: "1401", host: .semma),
+            .init(name: "Uno",      costCenter: "1414", host: .semma),
+            .init(name: "Syke",     costCenter: "1405", host: .semma),
+            .init(name: "Ylistö",   costCenter: "1403", host: .semma),
+            .init(name: "Taide",    costCenter: "0301", host: .compass),
+            .init(name: "Fiilu",    costCenter: "3364", host: .compass),
+        ]
+        
+        await withTaskGroup(of: [DisplayMeal].self) { group in
+            for r in restaurants {
+                group.addTask {
+                    var components = URLComponents(string: r.host.dayMenuBase)!
+                    components.queryItems = [
+                        URLQueryItem(name: "costCenter", value: r.costCenter),
+                        URLQueryItem(name: "date", value: dateStr),
+                        URLQueryItem(name: "language", value: "fi"),
+                    ]
+                    guard let url = components.url else { return [] }
+                    do {
+                        let (data, _) = try await URLSession.shared.data(from: url)
+                        if let decoded = try? JSONDecoder().decode(DayMenu.self, from: data) {
+                            let meals = decoded.menuPackages.flatMap { $0.meals }
+                            let displayMeals = meals.map { m in
+                                DisplayMeal(
+                                    id: "\(m.recipeId)-\(m.name)-\(r.host.rawValue)",
+                                    name: m.name,
+                                    recipeId: m.recipeId,
+                                    diets: m.diets,
+                                    iconUrl: m.iconUrl,
+                                    restaurantName: r.name,
+                                    host: r.host
+                                )
+                            }
+                            return displayMeals
+                        }
+                    } catch {
+                        print("Day menu fetch failed for \(r.name):", error)
+                    }
+                    return []
                 }
             }
-        } catch {
-            print("Decoding or network error:", error)
+            var combined: [DisplayMeal] = []
+            for await chunk in group {
+                combined.append(contentsOf: chunk)
+            }
+            await MainActor.run {
+                self.meals = combined
+            }
+        }
+        // Fetch nutrient stats then compute sorted list
+        await fetchNutrientStats(for: meals)
+        await MainActor.run {
+            computeSortedMeals()
         }
     }
     
-    private func fetchNutrientStats(for meals: [Meal]) async {
-        await withTaskGroup(of: (Int, NutrientStats?)?.self) { group in
+    private func fetchNutrientStats(for meals: [DisplayMeal]) async {
+        await withTaskGroup(of: (CompositeKey, NutrientStats?)?.self) { group in
             for meal in meals {
                 let recipeId = meal.recipeId
                 guard recipeId != 0 else { continue }
+                let key = CompositeKey(recipeId: recipeId, host: meal.host)
                 group.addTask {
-                    guard let url = URL(string: "https://www.semma.fi/menuapi/recipes/\(recipeId)?language=fi") else {
-                        return (recipeId, nil)
+                    guard let url = URL(string: "\(meal.host.recipeBase)/\(recipeId)?language=fi") else {
+                        return (key, nil)
                     }
                     do {
                         let (data, _) = try await URLSession.shared.data(from: url)
                         let detail = try JSONDecoder().decode(RecipeDetail.self, from: data)
-                        // Extract kcal and protein from nutritionalValues
                         let kcal = detail.nutritionalValues.first(where: { $0.name == "EnergyKcal" })?.amount
                         let protein = detail.nutritionalValues.first(where: { $0.name == "Protein" })?.amount
                         if let kcal, let protein {
-                            return (recipeId, NutrientStats(protein: protein, kcal: kcal))
+                            return (key, NutrientStats(protein: protein, kcal: kcal))
                         } else {
-                            return (recipeId, nil)
+                            return (key, nil)
                         }
                     } catch {
-                        print("Failed to fetch stats for \(recipeId):", error)
-                        return (recipeId, nil)
+                        print("Failed to fetch stats for \(recipeId) at \(meal.host):", error)
+                        return (key, nil)
                     }
                 }
             }
-            var newStats: [Int: NutrientStats] = [:]
+            var newStats: [CompositeKey: NutrientStats] = [:]
             for await result in group {
-                if let (rid, stat) = result, let stat {
-                    newStats[rid] = stat
+                if let (k, stat) = result, let stat {
+                    newStats[k] = stat
                 }
             }
             await MainActor.run {
@@ -150,15 +231,17 @@ struct ContentView: View {
     }
     
     private func computeSortedMeals() {
-        // Meals with valid stats first, sorted by kcal/protein ascending; others at bottom
         let (withStats, withoutStats) = meals.partitioned { meal in
-            if let stats = nutrientStats[meal.recipeId] {
+            let key = CompositeKey(recipeId: meal.recipeId, host: meal.host)
+            if let stats = nutrientStats[key] {
                 return stats.kcalPerProtein.isFinite
             }
             return false
         }
         let sortedWithStats = withStats.sorted {
-            guard let a = nutrientStats[$0.recipeId], let b = nutrientStats[$1.recipeId] else { return false }
+            let ka = CompositeKey(recipeId: $0.recipeId, host: $0.host)
+            let kb = CompositeKey(recipeId: $1.recipeId, host: $1.host)
+            guard let a = nutrientStats[ka], let b = nutrientStats[kb] else { return false }
             return a.kcalPerProtein < b.kcalPerProtein
         }
         self.sortedMeals = sortedWithStats + withoutStats
@@ -198,6 +281,7 @@ struct NutritionalValue: Codable, Identifiable {
 struct MealDetailView: View {
     let recipeId: Int
     let mealName: String
+    let host: Host
     
     @State private var detail: RecipeDetail?
     @State private var isLoading = false
@@ -261,7 +345,7 @@ struct MealDetailView: View {
             // Some items are generic and have recipeId 0
             return
         }
-        guard let url = URL(string: "https://www.semma.fi/menuapi/recipes/\(recipeId)?language=fi") else {
+        guard let url = URL(string: "\(host.recipeBase)/\(recipeId)?language=fi") else {
             errorMessage = "Virheellinen osoite."
             return
         }
