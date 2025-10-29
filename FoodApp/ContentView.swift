@@ -35,14 +35,14 @@ enum Host: String, Hashable {
     case semma
     case compass
     
-    var dayMenuBase: String {
+    nonisolated(unsafe) var dayMenuBase: String {
         switch self {
         case .semma: return "https://www.semma.fi/menuapi/day-menus"
         case .compass: return "https://www.compass-group.fi/menuapi/day-menus"
         }
     }
     
-    var recipeBase: String {
+    nonisolated(unsafe) var recipeBase: String {
         switch self {
         case .semma: return "https://www.semma.fi/menuapi/recipes"
         case .compass: return "https://www.compass-group.fi/menuapi/recipes"
@@ -156,7 +156,10 @@ struct ContentView: View {
                     guard let url = components.url else { return [] }
                     do {
                         let (data, _) = try await URLSession.shared.data(from: url)
-                        if let decoded = try? JSONDecoder().decode(DayMenu.self, from: data) {
+                        let decoded: DayMenu? = await MainActor.run {
+                            try? JSONDecoder().decode(DayMenu.self, from: data)
+                        }
+                        if let decoded {
                             let meals = decoded.menuPackages.flatMap { $0.meals }
                             let displayMeals = meals.map { m in
                                 DisplayMeal(
@@ -204,7 +207,9 @@ struct ContentView: View {
                     }
                     do {
                         let (data, _) = try await URLSession.shared.data(from: url)
-                        let detail = try JSONDecoder().decode(RecipeDetail.self, from: data)
+                        let detail = try await MainActor.run {
+                            try JSONDecoder().decode(RecipeDetail.self, from: data)
+                        }
                         let kcal = detail.nutritionalValues.first(where: { $0.name == "EnergyKcal" })?.amount
                         let protein = detail.nutritionalValues.first(where: { $0.name == "Protein" })?.amount
                         if let kcal, let protein {
@@ -353,7 +358,9 @@ struct MealDetailView: View {
         defer { isLoading = false }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
-            let decoded = try JSONDecoder().decode(RecipeDetail.self, from: data)
+            let decoded = try await MainActor.run {
+                try JSONDecoder().decode(RecipeDetail.self, from: data)
+            }
             await MainActor.run {
                 self.detail = decoded
             }
