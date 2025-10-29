@@ -7,7 +7,6 @@
 
 import SwiftUI
 
-
 struct ContentView: View {
     @State private var meals = [DisplayMeal]()
     @State private var nutrientStats: [CompositeKey: NutrientStats] = [:]
@@ -47,9 +46,23 @@ struct ContentView: View {
             await loadData()
         }
     }
+    
+    private func currentDateString() -> String {
+        let tz = TimeZone(identifier: "Europe/Helsinki") ?? .current
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = tz
+        
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = tz
+        formatter.locale = Locale(identifier: "fi_FI")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
+    
     func loadData() async {
         // Date string you want to fetch
-        let dateStr = "2025-10-29"
+        let dateStr = currentDateString()
         let restaurants: [Restaurant] = [
             .init(name: "Rentukka", costCenter: "1416", host: .semma),
             .init(name: "Piato",    costCenter: "1408", host: .semma),
