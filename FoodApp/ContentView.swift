@@ -22,7 +22,8 @@ struct ContentView: View {
                             .font(.headline)
                         Text(meal.restaurantName)
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .fontWeight(.semibold)
+                            .foregroundColor(colorForRestaurant(meal.restaurantName))
                         if let stats = nutrientStats[CompositeKey(recipeId: meal.recipeId, host: meal.host)], stats.kcalPerProtein.isFinite {
                             HStack(spacing: 12) {
                                 Text("Protein: \(formatNumber(stats.protein)) g")
@@ -174,6 +175,21 @@ struct ContentView: View {
         formatter.minimumFractionDigits = 0
         formatter.decimalSeparator = Locale.current.decimalSeparator
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+    
+    private func colorForRestaurant(_ name: String) -> Color {
+        switch name {
+        case "Rentukka": return .green
+        case "Taide": return .yellow.opacity(0.6)
+        case "Lozzi": return .orange
+        case "Ilokivi": return .yellow.opacity(0.8)
+        case "Uno": return Color(red: 0.9, green: 1.0, blue: 0.8)
+        case "Syke": return Color(red: 1.0, green: 1.0, blue: 0.6)
+        case "Ylistö": return .cyan
+        case "Piato": return .blue
+        case "Fiilu": return .red
+        default: return .gray
+        }
     }
 }
 
