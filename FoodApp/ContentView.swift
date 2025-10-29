@@ -7,90 +7,6 @@
 
 import SwiftUI
 
-struct DayMenu: Codable {
-    let dayOfWeek: String
-    let date: String
-    let menuPackages: [MenuPackage]
-    let html: String?
-    let isManualMenu: Bool
-}
-
-struct MenuPackage: Codable {
-    let sortOrder: Int
-    let name: String
-    let price: String?
-    let meals: [Meal]
-}
-
-struct Meal: Codable, Identifiable {
-    let name: String
-    let recipeId: Int
-    let diets: [String]
-    let iconUrl: String
-    
-    var id: String { "\(recipeId)-\(name)" }
-}
-
-enum Host: String, Hashable {
-    case semma
-    case compass
-    
-    nonisolated(unsafe) var dayMenuBase: String {
-        switch self {
-        case .semma: return "https://www.semma.fi/menuapi/day-menus"
-        case .compass: return "https://www.compass-group.fi/menuapi/day-menus"
-        }
-    }
-    
-    nonisolated(unsafe) var recipeBase: String {
-        switch self {
-        case .semma: return "https://www.semma.fi/menuapi/recipes"
-        case .compass: return "https://www.compass-group.fi/menuapi/recipes"
-        }
-    }
-}
-
-struct Restaurant: Hashable {
-    let name: String
-    let costCenter: String   // keep as String to preserve leading zeros
-    let host: Host
-}
-
-struct DisplayMeal: Identifiable, Hashable {
-    let id: String           // recipeId-name-host to ensure uniqueness
-    let name: String
-    let recipeId: Int
-    let diets: [String]
-    let iconUrl: String
-    let restaurantName: String
-    let host: Host
-}
-    
-struct NutrientStats {
-    let protein: Double
-    let kcal: Double
-    var kcalPerProtein: Double { protein > 0 ? kcal / protein : .infinity }
-}
-
-struct CompositeKey: Hashable {
-    let recipeId: Int
-    let host: Host
-}
-
-extension Array {
-    func partitioned(by belongsInFirstPartition: (Element) -> Bool) -> ([Element], [Element]) {
-        var first: [Element] = []
-        var second: [Element] = []
-        for element in self {
-            if belongsInFirstPartition(element) {
-                first.append(element)
-            } else {
-                second.append(element)
-            }
-        }
-        return (first, second)
-    }
-}
 
 struct ContentView: View {
     @State private var meals = [DisplayMeal]()
@@ -265,23 +181,6 @@ struct ContentView: View {
     ContentView()
 }
 
-// Models for recipe detail and detail view
-struct RecipeDetail: Codable {
-    let recipeId: Int
-    let name: String
-    let ingredientsCleaned: String
-    let lastModified: String
-    let nutritionalValues: [NutritionalValue]
-    let kgCO2ePer100g: Double?
-    let diets: String?
-}
-
-struct NutritionalValue: Codable, Identifiable {
-    var id: String { name }
-    let name: String
-    let amount: Double
-    let unit: String
-}
 
 struct MealDetailView: View {
     let recipeId: Int
