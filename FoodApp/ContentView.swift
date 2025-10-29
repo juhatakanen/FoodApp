@@ -3,7 +3,7 @@
 //  FoodApp
 //
 //  Created by Juha Takanen on 29.10.2025.
-//
+// Testilisäys
 
 import SwiftUI
 
